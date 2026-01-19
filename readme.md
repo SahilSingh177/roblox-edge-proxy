@@ -70,14 +70,14 @@ To verify system stability under pressure, I subjected the `roblox-edge-proxy` t
 **Test Command**: `npx autocannon -c 100 -d 10 http://localhost:3000/roblox/v1/users/1`
 
 ### Results (Local Environment)
-*   **Total Requests**: ~142,000 requests in 10 seconds.
-*   **Throughput**: **~14,000 Requests/Second**.
-*   **Latency**: **~4ms average** (Cache HIT).
+*   **Total Requests**: ~183,000 requests in 11 seconds.
+*   **Throughput**: **~16,605 Requests/Second**.
+*   **Latency**: **~5.59ms average** (Cache HIT).
 *   **Resilience**: Server handled 100% of traffic without crashing.
-    *   **4,591** Requests served (200 OK - Allowed by Rate Limiter).
-    *   **137,035** Requests blocked (429 Too Many Requests - Token Bucket effective).
+    *   **5,726** Requests served (200 OK - Allowed by Rate Limiter).
+    *   **176,924** Requests blocked (429 Too Many Requests - Token Bucket effective).
 
-> This proves the **Token Bucket** algorithm allows burst traffic (valid requests) while strictly protecting the upstream resources from 97% of the spam load.
+> **Engineering Note**: This proves the **Token Bucket** algorithm allows burst traffic (valid requests) while strictly protecting the upstream resources from **97%** of the spam load.
 
 ---
 
