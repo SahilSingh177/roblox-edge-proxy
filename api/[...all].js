@@ -1,4 +1,3 @@
-// api/[...all].js
 import app from "../server.mjs";
 import serverless from "serverless-http";
 

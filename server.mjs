@@ -1,7 +1,54 @@
 import "dotenv/config";
 import express from "express";
+import { LRUCache } from "./lru-cache.mjs";
+import { TokenBucket } from "./rate-limiter.mjs";
 
 const app = express();
+
+/** System Components */
+const cache = new LRUCache(100); // Cache up to 100 responses
+const limiter = new TokenBucket(500, 500); // 500 req/sec refiller, 500 max capacity
+
+/** Roblox Proxy Route */
+// Use RegExp to avoid path-to-regexp syntax issues
+app.get(/^\/roblox\/(.*)/, async (req, res) => {
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+
+  // 1. Rate Limiting
+  if (!limiter.consume(ip)) {
+    return res.status(429).json({ error: "Too many requests" });
+  }
+
+  // 2. Caching
+  const path = req.params[0] || "";
+  const upstreamUrl = "https://users.roblox.com/" + path;
+  // Use URL + query params as cache key
+  const cacheKey = upstreamUrl + new URLSearchParams(req.query).toString();
+  
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    res.setHeader("X-Cache", "HIT");
+    return res.json(cached);
+  }
+
+  try {
+    const upstreamRes = await fetch(upstreamUrl + "?" + new URLSearchParams(req.query));
+    if (!upstreamRes.ok) {
+        return res.status(upstreamRes.status).json({error: "Upstream error"});
+    }
+    
+    const data = await upstreamRes.json();
+    
+    // 3. Cache Storage
+    cache.put(cacheKey, data);
+    
+    res.setHeader("X-Cache", "MISS");
+    res.json(data);
+  } catch (error) {
+    console.error("Proxy error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 
 /** CORS */
 const ORIGINS = (process.env.ALLOWED_ORIGINS || "")
@@ -20,18 +67,6 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-
-/** Simple auth */
-function checkAuth(req, res) {
-  if (
-    !process.env.SHARED_SECRET ||
-    req.headers["x-api-key"] !== process.env.SHARED_SECRET
-  ) {
-    res.status(401).json({ error: "Unauthorized" });
-    return false;
-  }
-  return true;
-}
 
 /** Manual JSON reader (avoids Content-Length mismatch issues) */
 async function readJson(req) {
@@ -88,6 +123,11 @@ function buildDiscordContent({ msg = "", code = "", lang = "" }) {
 
 
 app.get("/relay", async (req, res) => {
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  if (!limiter.consume(ip, 5)) { // Higher cost (5) for relay/discord to prevent spam
+     return html(res, 429, "Too many requests");
+  }
+
   try {
     // Optional referer allowlist
     const referer = req.headers.referer || "";
@@ -107,10 +147,39 @@ app.get("/relay", async (req, res) => {
     }
 
     const msg = (req.query.m || "").toString();
+    const sender = (req.query.sender || "").toString(); // [NEW] Capture sender
     const lang = (req.query.lang || "").toString();
 
     // Accept either ?code=... or Base64 via ?code_b64=...
     let code = req.query.code != null ? String(req.query.code) : "";
+    const robloxId = req.query.roblox_id; // [NEW] Server-side fetch triggers
+
+    // If roblox_id is passed, fetch data server-side (Bypasses CORS/Mixed Content)
+    if (robloxId) {
+        try {
+            const upstream = "https://users.roblox.com/v1/users/" + robloxId;
+            // Check cache first (reuse existing cache logic if possible, or direct fetch)
+            // For simplicity here, we'll just use the cache instance
+            const cacheKey = upstream + "";
+            let data = cache.get(cacheKey);
+            
+            if (!data) {
+                 const r = await fetch(upstream);
+                 if (r.ok) {
+                     data = await r.json();
+                     cache.put(cacheKey, data);
+                 } else {
+                     data = { error: "Failed to fetch from Roblox", status: r.status };
+                 }
+            }
+            code = JSON.stringify(data, null, 2);
+            // Default to json lang if not set
+            if (!req.query.lang) req.query.lang = "json";
+        } catch (e) {
+            code = JSON.stringify({ error: e.message });
+        }
+    }
+
     if (!code && req.query.code_b64 != null) {
       try {
         code = Buffer.from(String(req.query.code_b64), "base64").toString(
@@ -125,6 +194,26 @@ app.get("/relay", async (req, res) => {
 
     // Build a safe Discord message (<= 2000 chars), with fencing when using code
     const content = msg || buildDiscordContent({ code, lang });
+    
+    // Use Webhook Username Override for cleaner display
+    const payload = { content };
+    if (sender) {
+        let suffix = "";
+        
+        // Prefer explicit 'site' param, fallback to Referer, default to empty
+        const site = (req.query.site || "").toString();
+        
+        if (site) {
+             // If site is passed (e.g. "roblox.com"), use it
+             suffix = ` (from ${site})`;
+        } else if (req.headers.referer) {
+            try {
+                const domain = new URL(req.headers.referer).hostname.replace('www.', '');
+                suffix = ` (from ${domain})`;
+            } catch (e) {}
+        }
+        payload.username = sender + suffix;
+    }
 
     if (!process.env.DISCORD_WEBHOOK_URL) {
       return html(res, 500, "Webhook not configured");
@@ -133,7 +222,7 @@ app.get("/relay", async (req, res) => {
     const r = await fetch(process.env.DISCORD_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(payload),
     });
 
     if (!r.ok && r.status !== 204) {
@@ -152,8 +241,12 @@ app.get("/relay", async (req, res) => {
 
 
 app.post("/discord", async (req, res) => {
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  if (!limiter.consume(ip, 5)) { // Higher cost for POSTs
+      return res.status(429).json({ error: "Too many requests" });
+  }
+
   try {
-    // if (!checkAuth(req, res)) return; // keep/restore auth as you prefer
     const body = await readJson(req);
     const { content, code, lang, embeds } = body || {};
 
