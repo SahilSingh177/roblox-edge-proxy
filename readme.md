@@ -1,4 +1,4 @@
-# Roblox-Discord Intermediary Service
+# Roblox Edge Proxy Service
 
 ## System Overview
 A high-throughput reverse proxy and relay service designed to overcome specific architectural limitations in the Roblox game engine and browser security models. The system facilitates secure, rate-limited communication between Roblox game servers (clients) and external APIs (Discord, Roblox Web API).
