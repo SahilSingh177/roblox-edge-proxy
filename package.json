@@ -4,10 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "build:native": "cmake-js compile -d native",
+    "rebuild:native": "cmake-js rebuild -d native",
+    "clean:native": "cmake-js clean -d native"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "node-addon-api": "^8.2.0"
+  },
+  "devDependencies": {
+    "cmake-js": "^7.3.0"
   }
 }

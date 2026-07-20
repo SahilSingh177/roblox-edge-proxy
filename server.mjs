@@ -1,13 +1,14 @@
 import "dotenv/config";
 import express from "express";
-import { LRUCache } from "./lru-cache.mjs";
-import { TokenBucket } from "./rate-limiter.mjs";
+import { LRUCache, TokenBucket, backend } from "./native-loader.mjs";
 
 const app = express();
 
 /** System Components */
 const cache = new LRUCache(100); // Cache up to 100 responses
 const limiter = new TokenBucket(500, 500); // 500 req/sec refiller, 500 max capacity
+
+console.log(`[rbx-proxy] cache/limiter backend: ${backend}`);
 
 /** Roblox Proxy Route */
 // Use RegExp to avoid path-to-regexp syntax issues
