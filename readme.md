@@ -34,6 +34,12 @@ It is engineered with a focus on latency reduction, abuse prevention, and strict
     *   **Refill Rate**: 500 Tokens/Second.
 *   **Impact**: Smooths out traffic spikes from game server initialization while strictly enforcing a hard ceiling on API abuse.
 
+### 5. Native C++ Addon
+*   **Motivation**: Provide a native implementation of the two hot-path data structures (`LRUCache`, `TokenBucket`) for environments where a native toolchain is available.
+*   **Implementation**: A `node-addon-api` module (`native/src/addon.cc`) built with `cmake-js`, using `std::list` + `std::unordered_map` for the LRU and a per-key `Bucket` map keyed on `steady_clock` for the limiter. Values are retained across GC cycles via `Napi::Reference<Napi::Value>`.
+*   **Runtime Loader**: `native-loader.mjs` attempts to load the compiled `.node` binary and transparently falls back to the JS implementations when it isn't present (fresh clones, Vercel serverless, missing toolchain). No call-site changes are required in `server.mjs`.
+*   **See**: [`approach.md`](approach.md) for the full design write-up.
+
 ---
 
 ## Technical Stack
@@ -41,7 +47,8 @@ It is engineered with a focus on latency reduction, abuse prevention, and strict
 *   **Runtime**: Node.js (v20+) - Chosen for non-blocking I/O capability suitable for high-concurrency proxying.
 *   **Framework**: Express.js - Minimalist routing layer.
 *   **Standard**: ECMAScript Modules (ESM) - Utilized for tree-shaking compatibility and modern syntax.
-*   **Data Structures**: Custom implementation of Linked Lists and Maps for cache/limiter logic (No external dependencies).
+*   **Data Structures**: Custom implementation of Linked Lists and Maps for cache/limiter logic (No external runtime dependencies).
+*   **Native Layer (Optional)**: C++17 N-API addon (`node-addon-api` + `cmake-js`) providing drop-in `LRUCache` / `TokenBucket` implementations, guarded by a runtime loader with graceful JS fallback for serverless deploys.
 
 ---
 
